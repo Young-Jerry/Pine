@@ -1,1 +1,193 @@
+//@version=5
+indicator("NY 9:30 Session Levels + Order Blocks + FVG", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
+// ============================================================
+// INPUTS
+// ============================================================
+grp1 = "Session / Day Levels"
+showPDHL   = input.bool(true, "Show Previous Day High/Low", group=grp1)
+showTDHL   = input.bool(true, "Show Today High/Low", group=grp1)
+showAsian  = input.bool(true, "Show Asian Session High/Low", group=grp1)
+showLondon = input.bool(true, "Show London Session High/Low", group=grp1)
+asianSess  = input.session("1800-0000", "Asian Session (NY time)", group=grp1)
+londonSess = input.session("0000-0600", "London Session (NY time)", group=grp1)
+sessTZ     = "America/New_York"
+extendLine = input.bool(true, "Extend lines to the right", group=grp1)
+
+grp2 = "Order Blocks"
+showOB       = input.bool(true, "Show Order Blocks", group=grp2)
+obLookback   = input.int(15, "Structure Lookback (bars)", minval=3, group=grp2)
+volMultiplier= input.float(1.5, "Displacement Volume Multiplier (x avg)", minval=1.0, step=0.1, group=grp2)
+obMaxAge     = input.int(200, "Remove OB box after N bars if untouched", minval=20, group=grp2)
+bullOBColor  = input.color(color.new(color.green, 80), "Bullish OB Color", group=grp2)
+bearOBColor  = input.color(color.new(color.red, 80), "Bearish OB Color", group=grp2)
+
+grp3 = "Fair Value Gaps (Higher TF)"
+showFVG   = input.bool(true, "Show FVG", group=grp3)
+fvgTF     = input.timeframe("60", "FVG Timeframe (e.g. 60=1H, 240=4H)", group=grp3)
+fvgMaxAge = input.int(60, "Remove FVG box after N higher-TF bars if unfilled", minval=5, group=grp3)
+bullFVGColor = input.color(color.new(color.teal, 75), "Bullish FVG Color", group=grp3)
+bearFVGColor = input.color(color.new(color.maroon, 75), "Bearish FVG Color", group=grp3)
+
+// ============================================================
+// UTILITY: draw / extend a ray with a label
+// ============================================================
+drawRay(float lvl, string txt, color col, line lnIn, label lbIn) =>
+    line lnOut = lnIn
+    label lbOut = lbIn
+    if na(lnIn)
+        lnOut := line.new(bar_index, lvl, bar_index, lvl, extend=extendLine ? extend.right : extend.none, color=col, width=2)
+        lbOut := label.new(bar_index, lvl, txt, style=label.style_label_left, color=color.new(col,100), textcolor=col, size=size.small)
+    else
+        line.set_y1(lnIn, lvl)
+        line.set_y2(lnIn, lvl)
+        label.set_y(lbIn, lvl)
+        label.set_text(lbIn, txt)
+    [lnOut, lbOut]
+
+// ============================================================
+// PREVIOUS DAY HIGH / LOW
+// ============================================================
+var line pdhLine = na
+var line pdlLine = na
+var label pdhLbl = na
+var label pdlLbl = na
+
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+
+if showPDHL
+    [pdhL, pdhLb] = drawRay(pdH, "PDH", color.orange, pdhLine, pdhLbl)
+    pdhLine := pdhL
+    pdhLbl := pdhLb
+    [pdlL, pdlLb] = drawRay(pdL, "PDL", color.orange, pdlLine, pdlLbl)
+    pdlLine := pdlL
+    pdlLbl := pdlLb
+
+// ============================================================
+// TODAY HIGH / LOW (running, resets on new NY day)
+// ============================================================
+newDay = ta.change(time("D", sessTZ)) != 0
+var float todayHigh = na
+var float todayLow  = na
+var line tdhLine = na
+var line tdlLine = na
+var label tdhLbl = na
+var label tdlLbl = na
+
+if newDay
+    todayHigh := high
+    todayLow  := low
+else
+    todayHigh := math.max(nz(todayHigh, high), high)
+    todayLow  := math.min(nz(todayLow, low), low)
+
+if showTDHL
+    [tdhL, tdhLb] = drawRay(todayHigh, "Day High", color.blue, tdhLine, tdhLbl)
+    tdhLine := tdhL
+    tdhLbl := tdhLb
+    [tdlL, tdlLb] = drawRay(todayLow, "Day Low", color.blue, tdlLine, tdlLbl)
+    tdlLine := tdlL
+    tdlLbl := tdlLb
+
+// ============================================================
+// GENERIC SESSION HIGH/LOW TRACKER (Asian / London)
+// ============================================================
+inAsian  = not na(time(timeframe.period, asianSess, sessTZ))
+inLondon = not na(time(timeframe.period, londonSess, sessTZ))
+
+var float asianHigh = na
+var float asianLow  = na
+var bool  asianActivePrev = false
+var line asianHLine = na
+var line asianLLine = na
+var label asianHLbl = na
+var label asianLLbl = na
+
+if inAsian
+    asianHigh := asianActivePrev ? math.max(asianHigh, high) : high
+    asianLow  := asianActivePrev ? math.min(asianLow, low) : low
+asianActivePrev := inAsian
+
+if showAsian and not na(asianHigh)
+    [aHL, aHLb] = drawRay(asianHigh, "Asian High", color.purple, asianHLine, asianHLbl)
+    asianHLine := aHL
+    asianHLbl := aHLb
+    [aLL, aLLb] = drawRay(asianLow, "Asian Low", color.purple, asianLLine, asianLLbl)
+    asianLLine := aLL
+    asianLLbl := aLLb
+
+var float londonHigh = na
+var float londonLow  = na
+var bool  londonActivePrev = false
+var line londonHLine = na
+var line londonLLine = na
+var label londonHLbl = na
+var label londonLLbl = na
+
+if inLondon
+    londonHigh := londonActivePrev ? math.max(londonHigh, high) : high
+    londonLow  := londonActivePrev ? math.min(londonLow, low) : low
+londonActivePrev := inLondon
+
+if showLondon and not na(londonHigh)
+    [lHL, lHLb] = drawRay(londonHigh, "London High", color.fuchsia, londonHLine, londonHLbl)
+    londonHLine := lHL
+    londonHLbl := lHLb
+    [lLL, lLLb] = drawRay(londonLow, "London Low", color.fuchsia, londonLLine, londonLLbl)
+    londonLLine := lLL
+    londonLLbl := lLLb
+
+// ============================================================
+// ORDER BLOCKS
+// last opposite-color candle before a high-volume displacement
+// candle that breaks recent swing structure
+// ============================================================
+avgVol = ta.sma(volume, 20)
+isDisplacement = volume > avgVol * volMultiplier
+
+recentHigh = ta.highest(high, obLookback)[1]
+recentLow  = ta.lowest(low, obLookback)[1]
+
+bullBreak = isDisplacement and close > recentHigh and close > open
+bearBreak = isDisplacement and close < recentLow and close < open
+
+// the "order block" candle is the last opposite-colored candle before this bar
+bullOBCandle = close[1] < open[1]   // bearish candle right before bullish displacement
+bearOBCandle = close[1] > open[1]   // bullish candle right before bearish displacement
+
+if showOB and bullBreak and bullOBCandle
+    boxTop = open[1]
+    boxBot = low[1]
+    box.new(bar_index[1], boxTop, bar_index + obMaxAge, boxBot, border_color=color.green, bgcolor=bullOBColor, extend=extend.none, text="Bull OB")
+
+if showOB and bearBreak and bearOBCandle
+    boxTop = high[1]
+    boxBot = open[1]
+    box.new(bar_index[1], boxTop, bar_index + obMaxAge, boxBot, border_color=color.red, bgcolor=bearOBColor, extend=extend.none, text="Bear OB")
+
+// ============================================================
+// FAIR VALUE GAPS on higher timeframe (default 1H)
+// classic 3-bar FVG: gap between bar[2] and bar[0]
+// ============================================================
+[htHigh0, htLow0, htHigh1, htLow1, htHigh2, htLow2, htTime0] = request.security(syminfo.tickerid, fvgTF,
+     [high, low, high[1], low[1], high[2], low[2], time], lookahead=barmerge.lookahead_off)
+
+var float lastFvgTime = na
+newHTBar = htTime0 != lastFvgTime
+
+bullFVG = htLow0 > htHigh2   // gap up: current low above high two bars back
+bearFVG = htHigh0 < htLow2   // gap down: current high below low two bars back
+
+if showFVG and newHTBar
+    lastFvgTime := htTime0
+    if bullFVG
+        box.new(bar_index, htLow0, bar_index + fvgMaxAge, htHigh2, border_color=color.teal, bgcolor=bullFVGColor, extend=extend.none, text="FVG")
+    if bearFVG
+        box.new(bar_index, htLow2, bar_index + fvgMaxAge, htHigh0, border_color=color.maroon, bgcolor=bearFVGColor, extend=extend.none, text="FVG")
+
+// ============================================================
+// 9:30 NY marker (vertical line) for quick reference
+// ============================================================
+is930 = not na(time("1", "0930-0931", sessTZ))
+if is930
+    line.new(bar_index, low - (high-low)*2, bar_index, high + (high-low)*2, color=color.new(color.gray, 40), style=line.style_dashed)
