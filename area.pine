@@ -12,39 +12,49 @@ showLondon = input.bool(true, "Show London Session High/Low", group=grp1)
 asianSess  = input.session("1800-0000", "Asian Session (NY time)", group=grp1)
 londonSess = input.session("0000-0600", "London Session (NY time)", group=grp1)
 sessTZ     = "America/New_York"
-extendLine = input.bool(true, "Extend lines to the right", group=grp1)
+labelOffset = input.int(3, "Right-side label offset (bars)", minval=1, maxval=50, group=grp1)
+
+// Focused blue/white palette so every level stays visually related.
+levelPDColor     = input.color(color.rgb(60, 135, 255), "Previous Day Level Color", group=grp1)
+levelTodayColor  = input.color(color.rgb(245, 250, 255), "Today Level Color", group=grp1)
+levelAsianColor  = input.color(color.rgb(130, 185, 255), "Asian Level Color", group=grp1)
+levelLondonColor = input.color(color.rgb(190, 220, 255), "London Level Color", group=grp1)
+markerColor      = input.color(color.new(color.rgb(165, 205, 255), 35), "9:30 Marker Color", group=grp1)
 
 grp2 = "Order Blocks"
 showOB       = input.bool(true, "Show Order Blocks", group=grp2)
 obLookback   = input.int(15, "Structure Lookback (bars)", minval=3, group=grp2)
-volMultiplier= input.float(1.5, "Displacement Volume Multiplier (x avg)", minval=1.0, step=0.1, group=grp2)
+volMultiplier= input.float(1.5, "OB Candle Volume Multiplier (x avg)", minval=1.0, step=0.1, group=grp2)
+obConfirmBars= input.int(3, "Trend Shift Confirmation Window", minval=1, maxval=3, group=grp2)
 obMaxAge     = input.int(200, "Remove OB box after N bars if untouched", minval=20, group=grp2)
-bullOBColor  = input.color(color.new(color.green, 80), "Bullish OB Color", group=grp2)
-bearOBColor  = input.color(color.new(color.red, 80), "Bearish OB Color", group=grp2)
+obKeyAtrDist = input.float(0.35, "Max Distance From Key Level (ATR)", minval=0.0, step=0.05, group=grp2)
+bullOBColor  = input.color(color.new(color.rgb(60, 135, 255), 82), "Bullish OB Color", group=grp2)
+bearOBColor  = input.color(color.new(color.rgb(245, 250, 255), 84), "Bearish OB Color", group=grp2)
 
 grp3 = "Fair Value Gaps (Higher TF)"
 showFVG   = input.bool(true, "Show FVG", group=grp3)
 fvgTF     = input.timeframe("60", "FVG Timeframe (e.g. 60=1H, 240=4H)", group=grp3)
 fvgMaxAge = input.int(60, "Remove FVG box after N higher-TF bars if unfilled", minval=5, group=grp3)
-bullFVGColor = input.color(color.new(color.teal, 75), "Bullish FVG Color", group=grp3)
-bearFVGColor = input.color(color.new(color.maroon, 75), "Bearish FVG Color", group=grp3)
+fvgFillColor = input.color(color.new(color.rgb(120, 185, 255), 90), "Universal 1H/4H FVG Color", group=grp3)
 
 // ============================================================
-// UTILITY: draw / extend a ray with a label
+// UTILITY: draw / extend a horizontal ray with a right-side label
 // ============================================================
 drawRay(float lvl, string txt, color col, line lnIn, label lbIn) =>
     line lnOut = lnIn
     label lbOut = lbIn
     if na(lnIn)
-        lnOut := line.new(bar_index, lvl, bar_index, lvl, extend=extendLine ? extend.right : extend.none, color=col, width=2)
-        lbOut := label.new(bar_index, lvl, txt, style=label.style_label_left, color=color.new(col,100), textcolor=col, size=size.small)
+        lnOut := line.new(bar_index, lvl, bar_index + 1, lvl, extend=extend.right, color=col, width=2)
+        lbOut := label.new(bar_index + labelOffset, lvl, txt, style=label.style_label_left, color=color.new(col, 100), textcolor=col, size=size.small)
     else
         line.set_y1(lnIn, lvl)
         line.set_y2(lnIn, lvl)
+        line.set_x2(lnIn, bar_index + 1)
+        label.set_x(lbIn, bar_index + labelOffset)
         label.set_y(lbIn, lvl)
         label.set_text(lbIn, txt)
+        label.set_textcolor(lbIn, col)
     [lnOut, lbOut]
-
 // ============================================================
 // PREVIOUS DAY HIGH / LOW
 // ============================================================
@@ -56,10 +66,10 @@ var label pdlLbl = na
 [pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
 
 if showPDHL
-    [pdhL, pdhLb] = drawRay(pdH, "PDH", color.orange, pdhLine, pdhLbl)
+    [pdhL, pdhLb] = drawRay(pdH, "Previous Day High", levelPDColor, pdhLine, pdhLbl)
     pdhLine := pdhL
     pdhLbl := pdhLb
-    [pdlL, pdlLb] = drawRay(pdL, "PDL", color.orange, pdlLine, pdlLbl)
+    [pdlL, pdlLb] = drawRay(pdL, "Previous Day Low", levelPDColor, pdlLine, pdlLbl)
     pdlLine := pdlL
     pdlLbl := pdlLb
 
@@ -82,10 +92,10 @@ else
     todayLow  := math.min(nz(todayLow, low), low)
 
 if showTDHL
-    [tdhL, tdhLb] = drawRay(todayHigh, "Day High", color.blue, tdhLine, tdhLbl)
+    [tdhL, tdhLb] = drawRay(todayHigh, "Today High", levelTodayColor, tdhLine, tdhLbl)
     tdhLine := tdhL
     tdhLbl := tdhLb
-    [tdlL, tdlLb] = drawRay(todayLow, "Day Low", color.blue, tdlLine, tdlLbl)
+    [tdlL, tdlLb] = drawRay(todayLow, "Today Low", levelTodayColor, tdlLine, tdlLbl)
     tdlLine := tdlL
     tdlLbl := tdlLb
 
@@ -109,10 +119,10 @@ if inAsian
 asianActivePrev := inAsian
 
 if showAsian and not na(asianHigh)
-    [aHL, aHLb] = drawRay(asianHigh, "Asian High", color.purple, asianHLine, asianHLbl)
+    [aHL, aHLb] = drawRay(asianHigh, "Asian High", levelAsianColor, asianHLine, asianHLbl)
     asianHLine := aHL
     asianHLbl := aHLb
-    [aLL, aLLb] = drawRay(asianLow, "Asian Low", color.purple, asianLLine, asianLLbl)
+    [aLL, aLLb] = drawRay(asianLow, "Asian Low", levelAsianColor, asianLLine, asianLLbl)
     asianLLine := aLL
     asianLLbl := aLLb
 
@@ -130,40 +140,55 @@ if inLondon
 londonActivePrev := inLondon
 
 if showLondon and not na(londonHigh)
-    [lHL, lHLb] = drawRay(londonHigh, "London High", color.fuchsia, londonHLine, londonHLbl)
+    [lHL, lHLb] = drawRay(londonHigh, "London High", levelLondonColor, londonHLine, londonHLbl)
     londonHLine := lHL
     londonHLbl := lHLb
-    [lLL, lLLb] = drawRay(londonLow, "London Low", color.fuchsia, londonLLine, londonLLbl)
+    [lLL, lLLb] = drawRay(londonLow, "London Low", levelLondonColor, londonLLine, londonLLbl)
     londonLLine := lLL
     londonLLbl := lLLb
 
 // ============================================================
 // ORDER BLOCKS
-// last opposite-color candle before a high-volume displacement
-// candle that breaks recent swing structure
+// Key-level OB: a high-volume opposite candle sitting on a session/day
+// level, followed within 1-3 bars by a structural trend shift.
 // ============================================================
 avgVol = ta.sma(volume, 20)
-isDisplacement = volume > avgVol * volMultiplier
+obAtr = ta.atr(14)
+obKeyTolerance = obAtr * obKeyAtrDist
 
 recentHigh = ta.highest(high, obLookback)[1]
 recentLow  = ta.lowest(low, obLookback)[1]
 
-bullBreak = isDisplacement and close > recentHigh and close > open
-bearBreak = isDisplacement and close < recentLow and close < open
+bullShift = close > recentHigh and close > open
+bearShift = close < recentLow and close < open
 
-// the "order block" candle is the last opposite-colored candle before this bar
-bullOBCandle = close[1] < open[1]   // bearish candle right before bullish displacement
-bearOBCandle = close[1] > open[1]   // bullish candle right before bearish displacement
+nearLevel(float zoneTop, float zoneBot, float level) =>
+    not na(level) and level <= zoneTop + obKeyTolerance and level >= zoneBot - obKeyTolerance
 
-if showOB and bullBreak and bullOBCandle
-    boxTop = open[1]
-    boxBot = low[1]
-    box.new(bar_index[1], boxTop, bar_index + obMaxAge, boxBot, border_color=color.green, bgcolor=bullOBColor, extend=extend.none, text="Bull OB")
+nearAnyKeyLevel(float zoneTop, float zoneBot) =>
+    nearLevel(zoneTop, zoneBot, pdH) or nearLevel(zoneTop, zoneBot, pdL) or nearLevel(zoneTop, zoneBot, todayHigh) or nearLevel(zoneTop, zoneBot, todayLow) or nearLevel(zoneTop, zoneBot, asianHigh) or nearLevel(zoneTop, zoneBot, asianLow) or nearLevel(zoneTop, zoneBot, londonHigh) or nearLevel(zoneTop, zoneBot, londonLow)
 
-if showOB and bearBreak and bearOBCandle
-    boxTop = high[1]
-    boxBot = open[1]
-    box.new(bar_index[1], boxTop, bar_index + obMaxAge, boxBot, border_color=color.red, bgcolor=bearOBColor, extend=extend.none, text="Bear OB")
+bullCandidate(int offset) =>
+    offset <= obConfirmBars and close[offset] < open[offset] and volume[offset] > avgVol[offset] * volMultiplier and nearAnyKeyLevel(open[offset], low[offset])
+
+bearCandidate(int offset) =>
+    offset <= obConfirmBars and close[offset] > open[offset] and volume[offset] > avgVol[offset] * volMultiplier and nearAnyKeyLevel(high[offset], open[offset])
+
+if showOB and bullShift
+    if bullCandidate(1)
+        box.new(bar_index[1], open[1], bar_index + obMaxAge, low[1], border_color=levelPDColor, bgcolor=bullOBColor, extend=extend.none, text="Bull OB")
+    else if bullCandidate(2)
+        box.new(bar_index[2], open[2], bar_index + obMaxAge, low[2], border_color=levelPDColor, bgcolor=bullOBColor, extend=extend.none, text="Bull OB")
+    else if bullCandidate(3)
+        box.new(bar_index[3], open[3], bar_index + obMaxAge, low[3], border_color=levelPDColor, bgcolor=bullOBColor, extend=extend.none, text="Bull OB")
+
+if showOB and bearShift
+    if bearCandidate(1)
+        box.new(bar_index[1], high[1], bar_index + obMaxAge, open[1], border_color=levelTodayColor, bgcolor=bearOBColor, extend=extend.none, text="Bear OB")
+    else if bearCandidate(2)
+        box.new(bar_index[2], high[2], bar_index + obMaxAge, open[2], border_color=levelTodayColor, bgcolor=bearOBColor, extend=extend.none, text="Bear OB")
+    else if bearCandidate(3)
+        box.new(bar_index[3], high[3], bar_index + obMaxAge, open[3], border_color=levelTodayColor, bgcolor=bearOBColor, extend=extend.none, text="Bear OB")
 
 // ============================================================
 // FAIR VALUE GAPS on higher timeframe (default 1H)
@@ -181,13 +206,13 @@ bearFVG = htHigh0 < htLow2   // gap down: current high below low two bars back
 if showFVG and newHTBar
     lastFvgTime := htTime0
     if bullFVG
-        box.new(bar_index, htLow0, bar_index + fvgMaxAge, htHigh2, border_color=color.teal, bgcolor=bullFVGColor, extend=extend.none, text="FVG")
+        box.new(bar_index, htLow0, bar_index + fvgMaxAge, htHigh2, border_color=color.new(fvgFillColor, 75), bgcolor=fvgFillColor, extend=extend.none, text="FVG")
     if bearFVG
-        box.new(bar_index, htLow2, bar_index + fvgMaxAge, htHigh0, border_color=color.maroon, bgcolor=bearFVGColor, extend=extend.none, text="FVG")
+        box.new(bar_index, htLow2, bar_index + fvgMaxAge, htHigh0, border_color=color.new(fvgFillColor, 75), bgcolor=fvgFillColor, extend=extend.none, text="FVG")
 
 // ============================================================
 // 9:30 NY marker (vertical line) for quick reference
 // ============================================================
 is930 = not na(time("1", "0930-0931", sessTZ))
 if is930
-    line.new(bar_index, low - (high-low)*2, bar_index, high + (high-low)*2, color=color.new(color.gray, 40), style=line.style_dashed)
+    line.new(bar_index, low - (high-low)*2, bar_index, high + (high-low)*2, color=markerColor, style=line.style_dashed)
