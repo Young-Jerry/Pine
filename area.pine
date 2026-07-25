@@ -20,6 +20,8 @@ levelTodayColor  = input.color(color.rgb(245, 250, 255), "Today Level Color", gr
 levelAsianColor  = input.color(color.rgb(130, 185, 255), "Asian Level Color", group=grp1)
 levelLondonColor = input.color(color.rgb(190, 220, 255), "London Level Color", group=grp1)
 markerColor      = input.color(color.new(color.rgb(165, 205, 255), 35), "9:30 Marker Color", group=grp1)
+keyCandleColor   = input.color(color.new(color.rgb(255, 215, 80), 84), "15m Key Candle Body Highlight", group=grp1)
+executionColor   = input.color(color.new(color.rgb(165, 205, 255), 88), "Execution Window Color", group=grp1)
 
 grp2 = "Order Blocks"
 showOB       = input.bool(true, "Show Order Blocks", group=grp2)
@@ -38,114 +40,246 @@ fvgMaxAge = input.int(60, "Remove FVG box after N higher-TF bars if unfilled", m
 fvgFillColor = input.color(color.new(color.rgb(120, 185, 255), 90), "Universal 1H/4H FVG Color", group=grp3)
 
 // ============================================================
-// UTILITY: draw / extend a horizontal ray with a right-side label
+// 15m KEY CANDLE CONTEXT + DRAWING HELPERS
+// Horizontal levels are right-facing rays that begin at the exact
+// 15m candle that created the level. The companion box marks only
+// that 15m candle body (open-to-close), not the wick.
 // ============================================================
-drawRay(float lvl, string txt, color col, line lnIn, label lbIn) =>
+[tf15Open, tf15High, tf15Low, tf15Close, tf15Time] = request.security(syminfo.tickerid, "15", [open, high, low, close, time], lookahead=barmerge.lookahead_off)
+new15Bar = ta.change(tf15Time) != 0
+levelLabelGap = ta.atr(14) * 0.10
+
+bodyTop(float candleOpen, float candleClose) =>
+    math.max(candleOpen, candleClose)
+
+bodyBottom(float candleOpen, float candleClose) =>
+    math.min(candleOpen, candleClose)
+
+drawRay(float lvl, string txt, color col, int startTime, bool labelAbove, line lnIn, label lbIn) =>
     line lnOut = lnIn
     label lbOut = lbIn
+    int rayStart = na(startTime) ? time : startTime
+    float labelY = labelAbove ? lvl + levelLabelGap : lvl - levelLabelGap
+    labelStyle = labelAbove ? label.style_label_up : label.style_label_down
     if na(lnIn)
-        lnOut := line.new(bar_index, lvl, bar_index + 1, lvl, extend=extend.right, color=col, width=2)
-        lbOut := label.new(bar_index + labelOffset, lvl, txt, style=label.style_label_left, color=color.new(col, 100), textcolor=col, size=size.small)
+        lnOut := line.new(rayStart, lvl, time, lvl, xloc=xloc.bar_time, extend=extend.right, color=col, width=2)
+        lbOut := label.new(bar_index + labelOffset, labelY, txt, style=labelStyle, color=color.new(col, 100), textcolor=col, size=size.small)
     else
+        line.set_x1(lnIn, rayStart)
         line.set_y1(lnIn, lvl)
+        line.set_x2(lnIn, time)
         line.set_y2(lnIn, lvl)
-        line.set_x2(lnIn, bar_index + 1)
         label.set_x(lbIn, bar_index + labelOffset)
-        label.set_y(lbIn, lvl)
+        label.set_y(lbIn, labelY)
         label.set_text(lbIn, txt)
+        label.set_style(lbIn, labelStyle)
         label.set_textcolor(lbIn, col)
     [lnOut, lbOut]
-// ============================================================
-// PREVIOUS DAY HIGH / LOW
-// ============================================================
-var line pdhLine = na
-var line pdlLine = na
-var label pdhLbl = na
-var label pdlLbl = na
 
-[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
-
-if showPDHL
-    [pdhL, pdhLb] = drawRay(pdH, "Previous Day High", levelPDColor, pdhLine, pdhLbl)
-    pdhLine := pdhL
-    pdhLbl := pdhLb
-    [pdlL, pdlLb] = drawRay(pdL, "Previous Day Low", levelPDColor, pdlLine, pdlLbl)
-    pdlLine := pdlL
-    pdlLbl := pdlLb
+drawBodyBox(int candleTime, float candleBodyTop, float candleBodyBot, color col, box boxIn) =>
+    box boxOut = boxIn
+    int leftTime = na(candleTime) ? time : candleTime
+    int rightTime = leftTime + 15 * 60 * 1000
+    if not na(candleBodyTop) and not na(candleBodyBot)
+        if na(boxIn)
+            boxOut := box.new(leftTime, candleBodyTop, rightTime, candleBodyBot, xloc=xloc.bar_time, border_color=color.new(col, 20), bgcolor=keyCandleColor, extend=extend.none)
+        else
+            box.set_left(boxIn, leftTime)
+            box.set_right(boxIn, rightTime)
+            box.set_top(boxIn, candleBodyTop)
+            box.set_bottom(boxIn, candleBodyBot)
+            box.set_border_color(boxIn, color.new(col, 20))
+            box.set_bgcolor(boxIn, keyCandleColor)
+    boxOut
 
 // ============================================================
-// TODAY HIGH / LOW (running, resets on new NY day)
+// PREVIOUS DAY / TODAY HIGH / LOW (tracked from 15m candles)
 // ============================================================
 newDay = ta.change(time("D", sessTZ)) != 0
 var float todayHigh = na
 var float todayLow  = na
+var int todayHighTime = na
+var int todayLowTime = na
+var float todayHighBodyTop = na
+var float todayHighBodyBot = na
+var float todayLowBodyTop = na
+var float todayLowBodyBot = na
+var float pdH = na
+var float pdL = na
+var int pdHTime = na
+var int pdLTime = na
+var float pdHBodyTop = na
+var float pdHBodyBot = na
+var float pdLBodyTop = na
+var float pdLBodyBot = na
+var line pdhLine = na
+var line pdlLine = na
+var label pdhLbl = na
+var label pdlLbl = na
+var box pdhBox = na
+var box pdlBox = na
 var line tdhLine = na
 var line tdlLine = na
 var label tdhLbl = na
 var label tdlLbl = na
+var box tdhBox = na
+var box tdlBox = na
 
 if newDay
-    todayHigh := high
-    todayLow  := low
-else
-    todayHigh := math.max(nz(todayHigh, high), high)
-    todayLow  := math.min(nz(todayLow, low), low)
+    pdH := todayHigh
+    pdL := todayLow
+    pdHTime := todayHighTime
+    pdLTime := todayLowTime
+    pdHBodyTop := todayHighBodyTop
+    pdHBodyBot := todayHighBodyBot
+    pdLBodyTop := todayLowBodyTop
+    pdLBodyBot := todayLowBodyBot
+    todayHigh := tf15High
+    todayLow := tf15Low
+    todayHighTime := tf15Time
+    todayLowTime := tf15Time
+    todayHighBodyTop := bodyTop(tf15Open, tf15Close)
+    todayHighBodyBot := bodyBottom(tf15Open, tf15Close)
+    todayLowBodyTop := bodyTop(tf15Open, tf15Close)
+    todayLowBodyBot := bodyBottom(tf15Open, tf15Close)
+else if new15Bar or na(todayHigh)
+    if na(todayHigh) or tf15High > todayHigh
+        todayHigh := tf15High
+        todayHighTime := tf15Time
+        todayHighBodyTop := bodyTop(tf15Open, tf15Close)
+        todayHighBodyBot := bodyBottom(tf15Open, tf15Close)
+    if na(todayLow) or tf15Low < todayLow
+        todayLow := tf15Low
+        todayLowTime := tf15Time
+        todayLowBodyTop := bodyTop(tf15Open, tf15Close)
+        todayLowBodyBot := bodyBottom(tf15Open, tf15Close)
+
+if showPDHL and not na(pdH)
+    [pdhL, pdhLb] = drawRay(pdH, "Previous Day High", levelPDColor, pdHTime, true, pdhLine, pdhLbl)
+    pdhLine := pdhL
+    pdhLbl := pdhLb
+    pdhBox := drawBodyBox(pdHTime, pdHBodyTop, pdHBodyBot, levelPDColor, pdhBox)
+    [pdlL, pdlLb] = drawRay(pdL, "Previous Day Low", levelPDColor, pdLTime, false, pdlLine, pdlLbl)
+    pdlLine := pdlL
+    pdlLbl := pdlLb
+    pdlBox := drawBodyBox(pdLTime, pdLBodyTop, pdLBodyBot, levelPDColor, pdlBox)
 
 if showTDHL
-    [tdhL, tdhLb] = drawRay(todayHigh, "Today High", levelTodayColor, tdhLine, tdhLbl)
+    [tdhL, tdhLb] = drawRay(todayHigh, "Today High", levelTodayColor, todayHighTime, true, tdhLine, tdhLbl)
     tdhLine := tdhL
     tdhLbl := tdhLb
-    [tdlL, tdlLb] = drawRay(todayLow, "Today Low", levelTodayColor, tdlLine, tdlLbl)
+    tdhBox := drawBodyBox(todayHighTime, todayHighBodyTop, todayHighBodyBot, levelTodayColor, tdhBox)
+    [tdlL, tdlLb] = drawRay(todayLow, "Today Low", levelTodayColor, todayLowTime, false, tdlLine, tdlLbl)
     tdlLine := tdlL
     tdlLbl := tdlLb
+    tdlBox := drawBodyBox(todayLowTime, todayLowBodyTop, todayLowBodyBot, levelTodayColor, tdlBox)
 
 // ============================================================
-// GENERIC SESSION HIGH/LOW TRACKER (Asian / London)
+// GENERIC SESSION HIGH/LOW TRACKER (Asian / London) from 15m bodies
 // ============================================================
-inAsian  = not na(time(timeframe.period, asianSess, sessTZ))
-inLondon = not na(time(timeframe.period, londonSess, sessTZ))
+
+inAsian  = not na(time("15", asianSess, sessTZ))
+inLondon = not na(time("15", londonSess, sessTZ))
 
 var float asianHigh = na
 var float asianLow  = na
-var bool  asianActivePrev = false
+var int asianHighTime = na
+var int asianLowTime = na
+var float asianHighBodyTop = na
+var float asianHighBodyBot = na
+var float asianLowBodyTop = na
+var float asianLowBodyBot = na
+var bool asianActivePrev = false
 var line asianHLine = na
 var line asianLLine = na
 var label asianHLbl = na
 var label asianLLbl = na
+var box asianHBox = na
+var box asianLBox = na
 
-if inAsian
-    asianHigh := asianActivePrev ? math.max(asianHigh, high) : high
-    asianLow  := asianActivePrev ? math.min(asianLow, low) : low
-asianActivePrev := inAsian
+if new15Bar
+    if inAsian
+        if not asianActivePrev or na(asianHigh)
+            asianHigh := tf15High
+            asianLow := tf15Low
+            asianHighTime := tf15Time
+            asianLowTime := tf15Time
+            asianHighBodyTop := bodyTop(tf15Open, tf15Close)
+            asianHighBodyBot := bodyBottom(tf15Open, tf15Close)
+            asianLowBodyTop := bodyTop(tf15Open, tf15Close)
+            asianLowBodyBot := bodyBottom(tf15Open, tf15Close)
+        else
+            if tf15High > asianHigh
+                asianHigh := tf15High
+                asianHighTime := tf15Time
+                asianHighBodyTop := bodyTop(tf15Open, tf15Close)
+                asianHighBodyBot := bodyBottom(tf15Open, tf15Close)
+            if tf15Low < asianLow
+                asianLow := tf15Low
+                asianLowTime := tf15Time
+                asianLowBodyTop := bodyTop(tf15Open, tf15Close)
+                asianLowBodyBot := bodyBottom(tf15Open, tf15Close)
+    asianActivePrev := inAsian
 
 if showAsian and not na(asianHigh)
-    [aHL, aHLb] = drawRay(asianHigh, "Asian High", levelAsianColor, asianHLine, asianHLbl)
+    [aHL, aHLb] = drawRay(asianHigh, "Asian High", levelAsianColor, asianHighTime, true, asianHLine, asianHLbl)
     asianHLine := aHL
     asianHLbl := aHLb
-    [aLL, aLLb] = drawRay(asianLow, "Asian Low", levelAsianColor, asianLLine, asianLLbl)
+    asianHBox := drawBodyBox(asianHighTime, asianHighBodyTop, asianHighBodyBot, levelAsianColor, asianHBox)
+    [aLL, aLLb] = drawRay(asianLow, "Asian Low", levelAsianColor, asianLowTime, false, asianLLine, asianLLbl)
     asianLLine := aLL
     asianLLbl := aLLb
+    asianLBox := drawBodyBox(asianLowTime, asianLowBodyTop, asianLowBodyBot, levelAsianColor, asianLBox)
 
 var float londonHigh = na
 var float londonLow  = na
-var bool  londonActivePrev = false
+var int londonHighTime = na
+var int londonLowTime = na
+var float londonHighBodyTop = na
+var float londonHighBodyBot = na
+var float londonLowBodyTop = na
+var float londonLowBodyBot = na
+var bool londonActivePrev = false
 var line londonHLine = na
 var line londonLLine = na
 var label londonHLbl = na
 var label londonLLbl = na
+var box londonHBox = na
+var box londonLBox = na
 
-if inLondon
-    londonHigh := londonActivePrev ? math.max(londonHigh, high) : high
-    londonLow  := londonActivePrev ? math.min(londonLow, low) : low
-londonActivePrev := inLondon
+if new15Bar
+    if inLondon
+        if not londonActivePrev or na(londonHigh)
+            londonHigh := tf15High
+            londonLow := tf15Low
+            londonHighTime := tf15Time
+            londonLowTime := tf15Time
+            londonHighBodyTop := bodyTop(tf15Open, tf15Close)
+            londonHighBodyBot := bodyBottom(tf15Open, tf15Close)
+            londonLowBodyTop := bodyTop(tf15Open, tf15Close)
+            londonLowBodyBot := bodyBottom(tf15Open, tf15Close)
+        else
+            if tf15High > londonHigh
+                londonHigh := tf15High
+                londonHighTime := tf15Time
+                londonHighBodyTop := bodyTop(tf15Open, tf15Close)
+                londonHighBodyBot := bodyBottom(tf15Open, tf15Close)
+            if tf15Low < londonLow
+                londonLow := tf15Low
+                londonLowTime := tf15Time
+                londonLowBodyTop := bodyTop(tf15Open, tf15Close)
+                londonLowBodyBot := bodyBottom(tf15Open, tf15Close)
+    londonActivePrev := inLondon
 
 if showLondon and not na(londonHigh)
-    [lHL, lHLb] = drawRay(londonHigh, "London High", levelLondonColor, londonHLine, londonHLbl)
+    [lHL, lHLb] = drawRay(londonHigh, "London High", levelLondonColor, londonHighTime, true, londonHLine, londonHLbl)
     londonHLine := lHL
     londonHLbl := lHLb
-    [lLL, lLLb] = drawRay(londonLow, "London Low", levelLondonColor, londonLLine, londonLLbl)
+    londonHBox := drawBodyBox(londonHighTime, londonHighBodyTop, londonHighBodyBot, levelLondonColor, londonHBox)
+    [lLL, lLLb] = drawRay(londonLow, "London Low", levelLondonColor, londonLowTime, false, londonLLine, londonLLbl)
     londonLLine := lLL
     londonLLbl := lLLb
+    londonLBox := drawBodyBox(londonLowTime, londonLowBodyTop, londonLowBodyBot, levelLondonColor, londonLBox)
 
 // ============================================================
 // ORDER BLOCKS
@@ -211,8 +345,17 @@ if showFVG and newHTBar
         box.new(bar_index, htLow2, bar_index + fvgMaxAge, htHigh0, border_color=color.new(fvgFillColor, 75), bgcolor=fvgFillColor, extend=extend.none, text="FVG")
 
 // ============================================================
-// 9:30 NY marker (vertical line) for quick reference
+// NY execution window markers
+// Very dim 9:15 and 10:15 verticals frame the execution window.
 // ============================================================
 is930 = not na(time("1", "0930-0931", sessTZ))
+is915 = not na(time("1", "0915-0916", sessTZ))
+is1015 = not na(time("1", "1015-1016", sessTZ))
+verticalPad = math.max(high - low, ta.atr(14)) * 2
 if is930
-    line.new(bar_index, low - (high-low)*2, bar_index, high + (high-low)*2, color=markerColor, style=line.style_dashed)
+    line.new(bar_index, low - verticalPad, bar_index, high + verticalPad, color=markerColor, style=line.style_dashed)
+if is915
+    line.new(bar_index, low - verticalPad, bar_index, high + verticalPad, color=executionColor, style=line.style_dotted)
+    label.new(bar_index, high + verticalPad, "Execution Window", style=label.style_label_down, color=color.new(executionColor, 100), textcolor=color.new(color.white, 55), size=size.tiny)
+if is1015
+    line.new(bar_index, low - verticalPad, bar_index, high + verticalPad, color=executionColor, style=line.style_dotted)
